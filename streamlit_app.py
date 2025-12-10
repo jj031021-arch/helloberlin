@@ -10,7 +10,7 @@ import plotly.express as px
 # ---------------------------------------------------------
 # 🚨 [여기만 고치세요] 파일 이름을 여기에 똑같이 넣으세요!
 # ---------------------------------------------------------
-CRIME_FILE_NAME = "Fallzahlen&HZ 2014-2023.xlsx" 
+CRIME_FILE_NAME = "Fallzahlen&HZ 2014-2023.csv" 
 # ↑↑ GitHub에 올린 파일 이름이 다르면 이 부분을 수정하세요. 
 # (예: "Fallzahlen&HZ 2015-2024.xlsx - Fallzahlen_2024.csv")
 
