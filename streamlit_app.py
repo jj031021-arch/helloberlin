@@ -6,7 +6,12 @@ import requests
 import google.generativeai as genai
 import googlemaps
 import plotly.express as px
-import streamlit.components.v1 as components  # 웹사이트 삽입용
+import streamlit.components.v1 as components
+
+# ---------------------------------------------------------
+# 🚨 파일 이름 설정 (엑셀 파일명 그대로!)
+# ---------------------------------------------------------
+CRIME_FILE_NAME = "2023_berlin_crime.xlsx" 
 
 # ---------------------------------------------------------
 # 1. 설정 및 API 키 로드
@@ -48,14 +53,11 @@ def get_weather():
 def get_osm_places(category, lat, lng, radius_m=3000, cuisine_filter=None):
     overpass_url = "http://overpass-api.de/api/interpreter"
     
-    if category == 'restaurant':
-        tag = '["amenity"="restaurant"]'
-    elif category == 'hotel':
-        tag = '["tourism"="hotel"]'
-    elif category == 'tourism':
-        tag = '["tourism"~"attraction|museum|artwork|viewpoint"]'
-    else:
-        return []
+    tag = ""
+    if category == 'restaurant': tag = '["amenity"="restaurant"]'
+    elif category == 'hotel': tag = '["tourism"="hotel"]'
+    elif category == 'tourism': tag = '["tourism"~"attraction|museum|artwork|viewpoint"]'
+    else: return []
 
     query = f"""
     [out:json];
@@ -104,33 +106,44 @@ def get_osm_places(category, lat, lng, radius_m=3000, cuisine_filter=None):
         return []
 
 @st.cache_data
-def load_crime_data_raw():
-    """통계 분석용 데이터 로드 (파일이 있을 때만 동작)"""
-    # 사용자가 올릴 법한 파일명 리스트
-    possible_files = [
-        "berlin_crime_2024.csv",
-        "Fallzahlen_2024.csv",
-        "Fallzahlen&HZ 2015-2024.xlsx - Fallzahlen_2024.csv"
-    ]
-    
-    for f in possible_files:
-        try:
-            # 2024년 데이터 형식 (앞 4줄 건너뛰기)
-            try:
-                df = pd.read_csv(f, skiprows=4, encoding='utf-8', on_bad_lines='skip')
-            except:
-                df = pd.read_csv(f, skiprows=4, encoding='latin1', on_bad_lines='skip')
-                
-            df.columns = [c.replace('\n', ' ').strip() for c in df.columns]
+def load_crime_data_excel(file_name):
+    """
+    엑셀 파일(.xlsx)을 읽어오는 함수입니다.
+    """
+    try:
+        # 엑셀 파일 읽기 (앞 4줄 건너뛰기 - skiprows=4)
+        # engine='openpyxl'은 엑셀 파일을 읽기 위한 도구입니다.
+        df = pd.read_excel(file_name, skiprows=4, engine='openpyxl')
             
-            # 컬럼 확인
-            if 'Bezeichnung (Bezirksregion)' in df.columns:
-                df = df.rename(columns={'Bezeichnung (Bezirksregion)': 'District'})
-                return df, f # 데이터와 성공한 파일명 반환
-        except:
-            continue
-            
-    return pd.DataFrame(), None
+        # 컬럼명 정리 (\n 제거)
+        df.columns = [str(c).replace('\n', ' ').strip() for c in df.columns]
+        
+        # 구 이름 필터링
+        berlin_districts = [
+            "Mitte", "Friedrichshain-Kreuzberg", "Pankow", "Charlottenburg-Wilmersdorf", 
+            "Spandau", "Steglitz-Zehlendorf", "Tempelhof-Schöneberg", "Neukölln", 
+            "Treptow-Köpenick", "Marzahn-Hellersdorf", "Lichtenberg", "Reinickendorf"
+        ]
+        
+        col_name = 'Bezeichnung (Bezirksregion)'
+        
+        # 파일마다 컬럼명이 다를 수 있어 확인
+        if col_name not in df.columns:
+            for c in df.columns:
+                if 'Bezeichnung' in c:
+                    col_name = c
+                    break
+        
+        if col_name in df.columns:
+            # 구 이름이 일치하는 행만 남김
+            df = df[df[col_name].isin(berlin_districts)]
+            df = df.rename(columns={col_name: 'District'})
+            return df
+        
+        return pd.DataFrame()
+    except Exception as e:
+        # st.error(f"엑셀 파일 읽기 오류: {e}") # 디버깅용
+        return pd.DataFrame()
 
 def get_gemini_response(prompt):
     if not GEMINI_API_KEY: return "API 키 확인 필요"
@@ -153,7 +166,7 @@ def search_location(query):
     return None, None, None
 
 # ---------------------------------------------------------
-# 3. 여행 코스 데이터 (문법 오류 수정됨)
+# 3. 여행 코스 데이터
 # ---------------------------------------------------------
 courses = {
     "🌳 Theme 1: 숲과 힐링 (티어가르텐)": [
@@ -258,22 +271,21 @@ cuisine_options = ["전체", "한식", "양식", "아시안", "카페", "일반/
 selected_cuisines = st.sidebar.multiselect("원하는 종류를 선택하세요", cuisine_options, default=["전체"])
 
 # --- 메인 탭 ---
-tab1, tab2, tab3, tab4 = st.tabs(["🗺️ 범죄 지도 & 탐험", "🚩 추천 코스 (6 Themes)", "💬 여행자 수다방", "📊 통계 분석 (Beta)"])
+tab1, tab2, tab3, tab4 = st.tabs(["🗺️ 범죄 지도 & 탐험", "🚩 추천 코스 (6 Themes)", "💬 여행자 수다방", "📊 데이터 분석"])
 
 # =========================================================
 # TAB 1: 공식 범죄 지도 (Iframe) + 탐험
 # =========================================================
 with tab1:
     st.subheader("🚨 베를린 공식 범죄 지도 (Kriminalitätsatlas)")
-    st.info("베를린 경찰청에서 제공하는 실시간 인터랙티브 지도입니다. (오류 없이 작동)")
-    # 공식 지도 임베딩
+    st.info("베를린 경찰청에서 제공하는 실시간 인터랙티브 지도입니다.")
     components.iframe("https://www.kriminalitaetsatlas.berlin.de/K-Atlas/atlas.html", height=650, scrolling=True)
     
     st.divider()
     
     st.subheader("🗺️ 내 주변 장소 탐색 (OSM)")
     center = st.session_state['map_center']
-    m1 = folium.Map(location=center, zoom_start=14)
+    m1 = folium.Map(location=center, zoom_start=13)
 
     if st.session_state['search_marker']:
         sm = st.session_state['search_marker']
@@ -283,7 +295,6 @@ with tab1:
             icon=folium.Icon(color='red', icon='info-sign')
         ).add_to(m1)
 
-    # 음식점
     if selected_cuisines:
         places = get_osm_places('restaurant', center[0], center[1], 3000, selected_cuisines)
         fg_food = folium.FeatureGroup(name="식당")
@@ -307,7 +318,6 @@ with tab1:
             ).add_to(fg_food)
         fg_food.add_to(m1)
 
-    # 호텔
     if show_hotel:
         hotels = get_osm_places('hotel', center[0], center[1], 3000)
         fg_hotel = folium.FeatureGroup(name="호텔")
@@ -326,7 +336,6 @@ with tab1:
             ).add_to(fg_hotel)
         fg_hotel.add_to(m1)
 
-    # 관광지
     if show_tour:
         tours = get_osm_places('tourism', center[0], center[1], 3000)
         fg_tour = folium.FeatureGroup(name="관광")
@@ -479,17 +488,17 @@ with tab3:
 # =========================================================
 with tab4:
     st.header("📊 범죄 통계 상세 분석")
-    st.caption("GitHub에 CSV 파일을 올리면 통계가 표시됩니다.")
+    st.caption("GitHub에 업로드된 엑셀/CSV 파일을 기반으로 분석합니다.")
     
     # 데이터 로드 시도
-    raw_df, loaded_file = load_crime_data_raw()
+    raw_df = load_crime_data_excel(CRIME_FILE_NAME)
 
     if not raw_df.empty:
-        st.success(f"📂 파일 로드 성공: {loaded_file}")
+        st.success(f"📂 파일 로드 성공: {CRIME_FILE_NAME}")
         
         c_filter1, c_filter2 = st.columns(2)
         with c_filter1:
-            st.info("📅 2024년 데이터 기준")
+            st.info("📅 2023년 데이터 기준")
         with c_filter2:
             districts = sorted(raw_df['District'].unique())
             selected_districts = st.multiselect("🏙️ 구(District) 선택", districts, default=districts)
@@ -541,4 +550,4 @@ with tab4:
             
     else:
         st.warning("⚠️ 통계 파일을 찾지 못했습니다.")
-        st.info("통계 분석을 보려면 GitHub 저장소에 'berlin_crime_2024.csv' (또는 Fallzahlen_2024.csv) 파일을 업로드하세요.")
+        st.info(f"GitHub에 '{CRIME_FILE_NAME}' 파일이 업로드되어 있는지 확인해주세요.")
