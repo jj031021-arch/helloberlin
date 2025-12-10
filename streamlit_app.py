@@ -8,11 +8,9 @@ import googlemaps
 import plotly.express as px
 
 # ---------------------------------------------------------
-# 🚨 [여기만 고치세요] 파일 이름을 여기에 똑같이 넣으세요!
+# 🚨 파일 이름 설정 (GitHub에 올린 이름과 같아야 합니다)
 # ---------------------------------------------------------
-CRIME_FILE_NAME = "Fallzahlen&HZ 2014-2023.csv" 
-# ↑↑ GitHub에 올린 파일 이름이 다르면 이 부분을 수정하세요. 
-# (예: "Fallzahlen&HZ 2015-2024.xlsx - Fallzahlen_2024.csv")
+CRIME_FILE_NAME = "berlin_crime_2024.csv" 
 
 # ---------------------------------------------------------
 # 1. 설정 및 API 키 로드
@@ -30,7 +28,7 @@ if GEMINI_API_KEY:
         pass
 
 # ---------------------------------------------------------
-# 2. 데이터 처리 함수
+# 2. 데이터 처리 함수 (오류 방지 기능 강화)
 # ---------------------------------------------------------
 @st.cache_data
 def get_exchange_rate():
@@ -109,41 +107,43 @@ def get_osm_places(category, lat, lng, radius_m=3000, cuisine_filter=None):
     except Exception:
         return []
 
+# ★★★ [핵심 수정] 데이터 로딩 함수 (숫자 강제 변환) ★★★
 @st.cache_data
 def load_and_process_crime_data(csv_file):
-    """2024년 데이터(독일어) 처리 로직"""
     try:
-        # 파일명 그대로 읽기 (인코딩 문제 시 latin1 시도)
+        # 1. 파일 읽기 (앞의 4줄 설명 건너뛰기)
         try:
             df = pd.read_csv(csv_file, skiprows=4, encoding='utf-8', on_bad_lines='skip')
         except:
             df = pd.read_csv(csv_file, skiprows=4, encoding='latin1', on_bad_lines='skip')
 
-        # 컬럼 정리
+        # 2. 컬럼명 정리
         df.columns = [c.replace('\n', ' ').strip() for c in df.columns]
         
-        # 구 이름 필터링
+        # 3. 구 이름 필터링
         berlin_districts = [
             "Mitte", "Friedrichshain-Kreuzberg", "Pankow", "Charlottenburg-Wilmersdorf", 
             "Spandau", "Steglitz-Zehlendorf", "Tempelhof-Schöneberg", "Neukölln", 
             "Treptow-Köpenick", "Marzahn-Hellersdorf", "Lichtenberg", "Reinickendorf"
         ]
         
-        col_name = 'Bezeichnung (Bezirksregion)' # 파일 내 구 이름 컬럼
-        
-        # 컬럼이 있는지 확인
-        if col_name not in df.columns:
-            return pd.DataFrame()
+        col_name = 'Bezeichnung (Bezirksregion)'
+        if col_name not in df.columns: return pd.DataFrame()
 
-        # 구 이름이 일치하는 행만 추출
         df_district = df[df[col_name].isin(berlin_districts)].copy()
         
-        # 총계 컬럼 찾기 (이름이 파일마다 조금씩 다를 수 있어 검색)
+        # 4. 총계 컬럼 찾기
         total_col = [c for c in df.columns if 'Straftaten' in c and 'insgesamt' in c]
         if not total_col: return pd.DataFrame()
         
         df_district = df_district.rename(columns={col_name: 'District', total_col[0]: 'Total_Crime'})
         df_district['District'] = df_district['District'].str.strip()
+        
+        # ★★★ 5. [오류 해결 핵심] 숫자로 강제 변환 ★★★
+        # 문자가 섞여있으면 숫자로 바꾸고, 안 되면 빈칸(NaN)으로 만듦
+        df_district['Total_Crime'] = pd.to_numeric(df_district['Total_Crime'], errors='coerce')
+        # 빈칸이 된 행은 삭제
+        df_district = df_district.dropna(subset=['Total_Crime'])
         
         return df_district[['District', 'Total_Crime']]
     except Exception:
@@ -151,7 +151,7 @@ def load_and_process_crime_data(csv_file):
 
 @st.cache_data
 def load_crime_data_raw(csv_file):
-    """통계용 원본 데이터"""
+    """통계 분석용 데이터 로드"""
     try:
         try:
             df = pd.read_csv(csv_file, skiprows=4, encoding='utf-8', on_bad_lines='skip')
@@ -277,7 +277,6 @@ st.sidebar.title("🛠️ 여행 도구")
 
 # 1. 검색
 st.sidebar.subheader("🔍 장소 찾기 (위치 이동)")
-st.sidebar.caption("지도 중심을 이동하여 주변 정보를 갱신합니다.")
 search_query = st.sidebar.text_input("장소 이름 (예: Curry 36)", placeholder="엔터키를 누르면 검색됩니다")
 if search_query:
     lat, lng, name = search_location(search_query + " Berlin")
@@ -333,7 +332,7 @@ with tab1:
                 name="범죄"
             ).add_to(m1)
         else:
-            st.warning(f"범죄 데이터({CRIME_FILE_NAME})를 읽을 수 없습니다. 파일명을 확인하세요.")
+            st.warning(f"범죄 데이터({CRIME_FILE_NAME})를 읽을 수 없습니다.")
 
     # 2. 음식점
     if selected_cuisines:
@@ -344,6 +343,7 @@ with tab1:
             if p['desc'] == '한식': c_color = 'red'
             elif p['desc'] == '카페': c_color = 'beige'
             
+            # 오류 방지를 위한 괄호 방식
             popup_html = (
                 f"<div style='font-family:sans-serif; width:150px'>"
                 f"<b>{p['name']}</b><br>"
@@ -420,7 +420,6 @@ with tab2:
             icon = 'cutlery' if item['type'] == 'food' else 'camera'
             
             link = f"https://www.google.com/search?q={item['name'].replace(' ', '+')}+Berlin"
-            
             popup_html = (
                 f"<div style='font-family:sans-serif; width:180px'>"
                 f"<b>{i+1}. {item['name']}</b><br>"
@@ -551,17 +550,21 @@ with tab4:
         cols_to_exclude = ['District', 'LOR-Schlüssel (Bezirksregion)', 'Total_Crime']
         crime_types = [c for c in df_display.select_dtypes(include=['number']).columns if c not in cols_to_exclude and 'insgesamt' not in c]
         
+        # 숫자형 변환 확인
+        for c in crime_types:
+            df_display[c] = pd.to_numeric(df_display[c], errors='coerce').fillna(0)
+
         total_crimes = df_display[crime_types].sum().sum()
         
-        if not df_display.empty:
+        if not df_display.empty and total_crimes > 0:
             most_crime_district = df_display.groupby('District')[crime_types].sum().sum(axis=1).idxmax()
             most_common_crime = df_display[crime_types].sum().idxmax()
             
             st.markdown("### 📌 핵심 지표")
             kpi1, kpi2, kpi3 = st.columns(3)
-            kpi1.metric("분석 대상 총 범죄", f"{total_crimes:,}건")
+            kpi1.metric("분석 대상 총 범죄", f"{int(total_crimes):,}건")
             kpi2.metric("최다 발생 지역", most_crime_district)
-            kpi3.metric("최다 빈번 범죄", most_common_crime)
+            kpi3.metric("최다 빈번 범죄 유형", most_common_crime)
             
             st.divider()
 
@@ -582,6 +585,6 @@ with tab4:
                 fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                 st.plotly_chart(fig_pie, use_container_width=True)
         else:
-            st.warning("선택된 지역의 데이터가 없습니다.")
+            st.warning("선택된 지역의 데이터가 없거나 0건입니다.")
     else:
         st.error(f"데이터 로드 실패: {CRIME_FILE_NAME} 파일이 있는지 확인해주세요.")
